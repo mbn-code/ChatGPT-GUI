@@ -6,7 +6,7 @@ import requests
 import json
 
 def get_api_key():
-    with open("api_key.key", "r") as key_file:
+    with open("api.key", "r") as key_file:
         api_key = key_file.read().strip()
     return api_key
 
@@ -30,7 +30,36 @@ class HuggingFaceGUI:
         self.create_widgets()
 
     def create_widgets(self):
-        # ... (unchanged code)
+        # Model selection
+        self.model_label = tk.Label(self.root, text="Select Model:")
+        self.model_label.grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
+
+        self.model_var = tk.StringVar()
+        self.model_var.set(self.model_options[0])
+
+        self.model_dropdown = ttk.Combobox(self.root, textvariable=self.model_var, values=self.model_options)
+        self.model_dropdown.grid(row=0, column=1, padx=10, pady=5, columnspan=2)
+
+        # Input section
+        self.input_label = tk.Label(self.root, text="Input:")
+        self.input_label.grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+
+        self.input_text = tk.Text(self.root, height=6, width=50)
+        self.input_text.grid(row=1, column=1, padx=10, pady=5, columnspan=2)
+
+        self.browse_button = tk.Button(self.root, text="Browse", command=self.browse_file)
+        self.browse_button.grid(row=2, column=0, padx=10, pady=5)
+
+        # Output section
+        self.output_label = tk.Label(self.root, text="Output:")
+        self.output_label.grid(row=3, column=0, padx=10, pady=5, sticky=tk.W)
+
+        self.output_text = tk.Text(self.root, height=6, width=50, state=tk.DISABLED)
+        self.output_text.grid(row=3, column=1, padx=10, pady=5, columnspan=2)
+
+        # Send button
+        self.send_button = tk.Button(self.root, text="Send", command=self.send_request)
+        self.send_button.grid(row=4, column=0, columnspan=3, pady=10)
 
     def browse_file(self):
         try:
