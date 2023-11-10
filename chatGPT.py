@@ -11,32 +11,7 @@ def get_api_key():
 
 API_TOKEN = get_api_key()
 
-def set_custom_style():
-    style = ttk.Style()
-
-    # Define the colors
-    style.theme_create("custom", settings={
-        "TLabel": {
-            "configure": {"foreground": "#eff1f5", "background": "#06070a"}
-        },
-        "TFrame": {
-            "configure": {"background": "#06070a"}
-        },
-        "TCombobox": {
-            "configure": {"background": "#37425c"}
-        },
-        "TButton": {
-            "configure": {"background": "#37425c", "foreground": "#eff1f5"}
-        },
-        "TText": {
-            "configure": {"background": "#131720", "foreground": "#eff1f5"}
-        }
-    })
-    style.theme_use("custom")
-
 class HuggingFaceGUI:
-    set_custom_style()  # Set the custom style
-
     def __init__(self, root):
         self.root = root
         self.root.set_theme("arc")  # Set a custom theme using ttkthemes
