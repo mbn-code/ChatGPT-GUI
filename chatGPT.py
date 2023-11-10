@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog
 import requests
 import json
 
-API_TOKEN = "YOUR_HUGGING_FACE_API_TOKEN"
+API_TOKEN = "YOUR_API_TOKEN_HERE"
 
 class HuggingFaceGUI:
     def __init__(self, root):
@@ -55,47 +55,57 @@ class HuggingFaceGUI:
         self.send_button.grid(row=4, column=0, columnspan=3, pady=10)
 
     def browse_file(self):
-        file_path = filedialog.askopenfilename()
-        if file_path:
-            with open(file_path, "r") as file:
-                content = file.read()
-                self.input_text.delete(1.0, tk.END)
-                self.input_text.insert(tk.END, content)
+        try:
+            file_path = filedialog.askopenfilename()
+            if file_path:
+                with open(file_path, "r") as file:
+                    content = file.read()
+                    self.input_text.delete(1.0, tk.END)
+                    self.input_text.insert(tk.END, content)
+        except Exception as e:
+            error_message = f"Error reading file: {str(e)}"
+            self.show_error_message(error_message)
 
     def send_request(self):
         selected_model = self.model_var.get()
-        input_text = self.input_text.get("1.0", tk.END).strip()
+        input_text = self.input_text.get("1.0", tk.END).strip()  # Adjusted this line
 
-        if input_text:
+        if input_text and not input_text.isspace():
             api_url = f"https://api-inference.huggingface.co/models/{selected_model}"
             headers = {"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"}
-            payload = {"inputs": [input_text]}  # Adjust payload to list format
+            payload = {"inputs": [input_text]}
+
+            print("API URL:", api_url)
+            print("Headers:", headers)
+            print("Payload:", payload)
 
             try:
                 response_data = self.query_huggingface_api(api_url, headers, payload)
                 formatted_response = json.dumps(response_data, indent=2)
-                self.output_text.config(state=tk.NORMAL)
-                self.output_text.delete("1.0", tk.END)
-                self.output_text.insert(tk.END, formatted_response)
-                self.output_text.config(state=tk.DISABLED)
-            except Exception as e:
-                error_message = f"Error: {str(e)}"
-                self.output_text.config(state=tk.NORMAL)
-                self.output_text.delete("1.0", tk.END)
-                self.output_text.insert(tk.END, error_message)
-                self.output_text.config(state=tk.DISABLED)
+                self.show_output(formatted_response)
+            except requests.exceptions.RequestException as e:
+                error_message = f"Request error: {str(e)}"
+                self.show_error_message(error_message)
         else:
-            self.output_text.config(state=tk.NORMAL)
-            self.output_text.delete("1.0", tk.END)
-            self.output_text.insert(tk.END, "Please enter input text.")
-            self.output_text.config(state=tk.DISABLED)
+            self.show_error_message("Please enter valid input text.")
+
+    def show_output(self, formatted_response):
+        self.output_text.config(state=tk.NORMAL)
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.insert(tk.END, formatted_response)
+        self.output_text.config(state=tk.DISABLED)
+
+    def show_error_message(self, error_message):
+        self.output_text.config(state=tk.NORMAL)
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.insert(tk.END, f"Error: {error_message}")
+        self.output_text.config(state=tk.DISABLED)
 
     @staticmethod
     def query_huggingface_api(api_url, headers, payload):
         response = requests.post(api_url, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()
-
 
 if __name__ == "__main__":
     root = tk.Tk()
