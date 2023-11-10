@@ -11,19 +11,20 @@ Before using this application, you need to obtain an API key from Hugging Face. 
 1. Clone the repository or download the `chatGPT.py` script to your local machine.
 2. Make sure you have Python and the required libraries installed. You can install these libraries using `pip`:
 
+
    ```bash
    pip install tkinter requests
    ```
 
-3. Place your Hugging Face API key in a file named `api.key` in the same directory as `chatGPT.py`.
-
-4. Run the script:
+3. create a api.key file
+   
+4. Place your Hugging Face API key in a file named `api.key` in the same directory as `chatGPT.py`.
+  
+5. Run the script:
 
    ```bash
    python chatGPT.py
    ```
-
-## Features
 
 ### Model Selection
 
@@ -34,6 +35,10 @@ You can select the Hugging Face model you want to use from a dropdown list. The 
 - google/vit-base-patch16-224
 - superb/hubert-large-superb-er
 - facebook/wav2vec2-base-960h
+- sentence-transformers/all-MiniLM-L6-v2
+- distilbert-base-uncased-finetuned-sst-2-english
+- gpt2
+
 
 ### Input Text
 
