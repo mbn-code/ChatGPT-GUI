@@ -1,7 +1,6 @@
-# chatGPT.py
-
 import tkinter as tk
 from tkinter import ttk, filedialog
+from ttkthemes import ThemedTk  # Import ThemedTk for custom themes
 import requests
 import json
 
@@ -15,15 +14,18 @@ API_TOKEN = get_api_key()
 class HuggingFaceGUI:
     def __init__(self, root):
         self.root = root
+        self.root.set_theme("arc")  # Set a custom theme using ttkthemes
         self.root.title("Hugging Face Inference API GUI")
 
         # Model options
         self.model_options = [
-            "facebook/detr-resnet-50-panoptic",
-            "facebook/detr-resnet-50",
-            "google/vit-base-patch16-224",
-            "superb/hubert-large-superb-er",
-            "facebook/wav2vec2-base-960h"
+            "bert-base-uncased",
+            "facebook/bart-large-cnn",
+            "deepset/roberta-base-squad2",
+            "google/tapas-base-finetuned-wtq",
+            "sentence-transformers/all-MiniLM-L6-v2",
+            "distilbert-base-uncased-finetuned-sst-2-english",
+            "gpt2"
         ]
 
         # GUI components
@@ -40,26 +42,47 @@ class HuggingFaceGUI:
         self.model_dropdown = ttk.Combobox(self.root, textvariable=self.model_var, values=self.model_options)
         self.model_dropdown.grid(row=0, column=1, padx=10, pady=5, columnspan=2)
 
+        # Model description
+        model_description_label = tk.Label(self.root, text="Model Description:")
+        model_description_label.grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+
+        model_description_text = tk.Text(self.root, height=6, width=50, state=tk.DISABLED)
+        model_description_text.grid(row=1, column=1, padx=10, pady=5, columnspan=2)
+
+        self.model_dropdown.bind("<<ComboboxSelected>>", lambda event: self.update_model_description(model_description_text))
+
         # Input section
         self.input_label = tk.Label(self.root, text="Input:")
-        self.input_label.grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+        self.input_label.grid(row=2, column=0, padx=10, pady=5, sticky=tk.W)
 
         self.input_text = tk.Text(self.root, height=6, width=50)
-        self.input_text.grid(row=1, column=1, padx=10, pady=5, columnspan=2)
+        self.input_text.grid(row=2, column=1, padx=10, pady=5, columnspan=2)
 
         self.browse_button = tk.Button(self.root, text="Browse", command=self.browse_file)
-        self.browse_button.grid(row=2, column=0, padx=10, pady=5)
+        self.browse_button.grid(row=3, column=0, padx=10, pady=5)
 
         # Output section
         self.output_label = tk.Label(self.root, text="Output:")
-        self.output_label.grid(row=3, column=0, padx=10, pady=5, sticky=tk.W)
+        self.output_label.grid(row=4, column=0, padx=10, pady=5, sticky=tk.W)
 
         self.output_text = tk.Text(self.root, height=6, width=50, state=tk.DISABLED)
-        self.output_text.grid(row=3, column=1, padx=10, pady=5, columnspan=2)
+        self.output_text.grid(row=4, column=1, padx=10, pady=5, columnspan=2)
 
         # Send button
         self.send_button = tk.Button(self.root, text="Send", command=self.send_request)
-        self.send_button.grid(row=4, column=0, columnspan=3, pady=10)
+        self.send_button.grid(row=5, column=0, columnspan=3, pady=10)
+
+        # Status message
+        self.status_label = tk.Label(self.root, text="", fg="red")
+        self.status_label.grid(row=6, column=0, columnspan=3)
+
+    def update_model_description(self, model_description_text):
+        selected_model = self.model_var.get()
+        model_description = f"Custom description for {selected_model}"  # Replace with actual descriptions
+        model_description_text.config(state=tk.NORMAL)
+        model_description_text.delete("1.0", tk.END)
+        model_description_text.insert(tk.END, model_description)
+        model_description_text.config(state=tk.DISABLED)
 
     def browse_file(self):
         try:
@@ -74,6 +97,9 @@ class HuggingFaceGUI:
             self.show_error_message(error_message)
 
     def send_request(self):
+        self.status_label.config(text="Sending request...", fg="blue")
+        self.root.update_idletasks()
+
         selected_model = self.model_var.get()
         input_text = self.input_text.get("1.0", tk.END).strip()
 
@@ -81,10 +107,6 @@ class HuggingFaceGUI:
             api_url = f"https://api-inference.huggingface.co/models/{selected_model}"
             headers = {"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"}
             payload = {"inputs": [input_text]}
-
-            print("API URL:", api_url)
-            print("Headers:", headers)
-            print("Payload:", payload)
 
             try:
                 response_data = self.query_huggingface_api(api_url, headers, payload)
@@ -94,12 +116,21 @@ class HuggingFaceGUI:
                 error_message = f"Request error: {str(e)}"
                 self.show_error_message(error_message)
         else:
-            self.show_error_message("Please enter valid input text.")
+            self.show_error_message("Please enter valid input text")
+
+        self.status_label.config(text="", fg="red")
 
     def show_output(self, formatted_response):
         self.output_text.config(state=tk.NORMAL)
         self.output_text.delete("1.0", tk.END)
-        self.output_text.insert(tk.END, formatted_response)
+
+        try:
+            response_data = json.loads(formatted_response)
+            generated_text = response_data[0][0]["generated_text"]
+            self.output_text.insert(tk.END, generated_text)
+        except (json.JSONDecodeError, KeyError, IndexError):
+            self.output_text.insert(tk.END, "Error: Unable to extract generated text from the response")
+
         self.output_text.config(state=tk.DISABLED)
 
     def show_error_message(self, error_message):
@@ -115,6 +146,9 @@ class HuggingFaceGUI:
         return response.json()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = HuggingFaceGUI(root)
-    root.mainloop()
+    try:
+        root = ThemedTk()  # Use ThemedTk for custom themes
+        app = HuggingFaceGUI(root)
+        root.mainloop()
+    except Exception as e:
+        print(f"An error occurred: {e}")
