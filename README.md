@@ -13,7 +13,7 @@ Before using this application, you need to obtain an API key from Hugging Face. 
 
 
    ```bash
-   pip install tkinter requests
+   pip install ttkthemes requests
    ```
 
 3. create a api.key file
