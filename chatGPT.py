@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
-from ttkthemes import ThemedTk  # Import ThemedTk for custom themes
+from ttkthemes import ThemedTk
 import requests
 import json
 
@@ -14,25 +14,18 @@ API_TOKEN = get_api_key()
 class HuggingFaceGUI:
     def __init__(self, root):
         self.root = root
-        self.root.set_theme("arc")  # Set a custom theme using ttkthemes
+        self.root.set_theme("arc")
         self.root.title("Hugging Face Inference API GUI")
 
-        # Model options
         self.model_options = [
-            "bert-base-uncased",
-            "facebook/bart-large-cnn",
-            "deepset/roberta-base-squad2",
-            "google/tapas-base-finetuned-wtq",
-            "sentence-transformers/all-MiniLM-L6-v2",
-            "distilbert-base-uncased-finetuned-sst-2-english",
-            "gpt2"
+            "bert-base-uncased", "facebook/bart-large-cnn", "deepset/roberta-base-squad2",
+            "google/tapas-base-finetuned-wtq", "sentence-transformers/all-MiniLM-L6-v2",
+            "distilbert-base-uncased-finetuned-sst-2-english", "gpt2"
         ]
 
-        # GUI components
         self.create_widgets()
 
     def create_widgets(self):
-        # Model selection
         self.model_label = tk.Label(self.root, text="Select Model:")
         self.model_label.grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
 
@@ -42,7 +35,6 @@ class HuggingFaceGUI:
         self.model_dropdown = ttk.Combobox(self.root, textvariable=self.model_var, values=self.model_options)
         self.model_dropdown.grid(row=0, column=1, padx=10, pady=5, columnspan=2)
 
-        # Model description
         model_description_label = tk.Label(self.root, text="Model Description:")
         model_description_label.grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
 
@@ -51,7 +43,6 @@ class HuggingFaceGUI:
 
         self.model_dropdown.bind("<<ComboboxSelected>>", lambda event: self.update_model_description(model_description_text))
 
-        # Input section
         self.input_label = tk.Label(self.root, text="Input:")
         self.input_label.grid(row=2, column=0, padx=10, pady=5, sticky=tk.W)
 
@@ -61,24 +52,21 @@ class HuggingFaceGUI:
         self.browse_button = tk.Button(self.root, text="Browse", command=self.browse_file)
         self.browse_button.grid(row=3, column=0, padx=10, pady=5)
 
-        # Output section
         self.output_label = tk.Label(self.root, text="Output:")
         self.output_label.grid(row=4, column=0, padx=10, pady=5, sticky=tk.W)
 
         self.output_text = tk.Text(self.root, height=6, width=50, state=tk.DISABLED)
         self.output_text.grid(row=4, column=1, padx=10, pady=5, columnspan=2)
 
-        # Send button
         self.send_button = tk.Button(self.root, text="Send", command=self.send_request)
         self.send_button.grid(row=5, column=0, columnspan=3, pady=10)
 
-        # Status message
         self.status_label = tk.Label(self.root, text="", fg="red")
         self.status_label.grid(row=6, column=0, columnspan=3)
 
     def update_model_description(self, model_description_text):
         selected_model = self.model_var.get()
-        model_description = f"Custom description for {selected_model}"  # Replace with actual descriptions
+        model_description = f"Custom description for {selected_model}"
         model_description_text.config(state=tk.NORMAL)
         model_description_text.delete("1.0", tk.END)
         model_description_text.insert(tk.END, model_description)
@@ -90,7 +78,7 @@ class HuggingFaceGUI:
             if file_path:
                 with open(file_path, "r") as file:
                     content = file.read()
-                    self.input_text.delete(1.0, tk.END)
+                    self.input_text.delete("1.0", tk.END)
                     self.input_text.insert(tk.END, content)
         except Exception as e:
             error_message = f"Error reading file: {str(e)}"
@@ -147,7 +135,7 @@ class HuggingFaceGUI:
 
 if __name__ == "__main__":
     try:
-        root = ThemedTk()  # Use ThemedTk for custom themes
+        root = ThemedTk()
         app = HuggingFaceGUI(root)
         root.mainloop()
     except Exception as e:
