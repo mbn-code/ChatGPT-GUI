@@ -4,6 +4,20 @@ from ttkthemes import ThemedTk
 import requests
 import json
 
+
+
+# Error Handling
+@staticmethod
+def query_huggingface_api(api_url, headers, payload):
+    try:
+        response = requests.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}
+
+
+
 def get_api_key():
     with open("api.key", "r") as key_file:
         api_key = key_file.read().strip()
@@ -108,6 +122,11 @@ class HuggingFaceGUI:
 
         self.status_label.config(text="", fg="red")
 
+                # Then in the send_request method, handle the error returned by query_huggingface_api
+        response_data = self.query_huggingface_api(api_url, headers, payload)
+        if "error" in response_data:
+            self.show_error_message(response_data["error"])
+            return
     def show_output(self, formatted_response):
         self.output_text.config(state=tk.NORMAL)
         self.output_text.delete("1.0", tk.END)
@@ -135,7 +154,8 @@ class HuggingFaceGUI:
 
 if __name__ == "__main__":
     try:
-        root = ThemedTk()
+        # Then in your main function
+        root = ThemedTk(theme="radiance")  # Use the radiance theme
         app = HuggingFaceGUI(root)
         root.mainloop()
     except Exception as e:
