@@ -29,6 +29,7 @@ class GUI:
         }
         
         self.model_var = tk.StringVar(value="llama2")
+        self.status_var = tk.StringVar(value="")  # Add status variable
         self.setup_styles()
         self.create_widgets()
 
@@ -59,6 +60,15 @@ class GUI:
         model_label.pack(side='left', padx=(0, 5))
         model_dropdown = ttk.Combobox(control_panel, textvariable=self.model_var, values=models, width=15)
         model_dropdown.pack(side='left', padx=5)
+
+        # Add status label
+        self.status_label = ttk.Label(
+            control_panel, 
+            textvariable=self.status_var, 
+            foreground='#007acc',
+            background=self.colors['bg']
+        )
+        self.status_label.pack(side='right', padx=5)
 
         # Add buttons with improved styling
         self.add_tab_button = ttk.Button(control_panel, text="New Chat", style='Custom.TButton', command=self.add_tab)
@@ -122,14 +132,23 @@ class GUI:
         input_text = user_input.get().strip()
 
         if input_text and not input_text.isspace():
+            self.status_var.set("Processing request...")
             response_data = query_ollama(selected_model, input_text)
+            
             if 'error' in response_data:
-                self.show_error_message(chat_log, response_data['error'])
+                if "downloading" in response_data['error'].lower():
+                    self.status_var.set("Downloading model... This may take several minutes depending on your internet and storage speed.")
+                    # You might want to implement a retry mechanism here
+                else:
+                    self.show_error_message(chat_log, response_data['error'])
+                    self.status_var.set("")
             else:
                 formatted_response = json.dumps(response_data, indent=2)
                 self.show_output(chat_log, formatted_response)
+                self.status_var.set("")
         else:
             self.show_error_message(chat_log, "Please enter valid input text")
+            self.status_var.set("")
 
         user_input.delete(0, 'end')
     
