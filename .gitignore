@@ -1,1 +1,44 @@
+# API Keys and Secrets
 api.key
+*.env
+.env
+config.json
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs
+dist/
+build/
+out/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+.temp/
+
+# Testing
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+
+# Miscellaneous
+*.bak
+*.tmp
+*.old
