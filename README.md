@@ -89,7 +89,3 @@ The application handles common errors including:
 ## Contributing
 
 Feel free to submit issues and enhancement requests!
-
-## License
-
-[Your chosen license]
