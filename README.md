@@ -4,15 +4,15 @@ A polished desktop chat client for local language models served by
 [Ollama](https://ollama.com/). It runs entirely on your machine — no API keys,
 no cloud, nothing leaves your computer.
 
-![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![GUI](https://img.shields.io/badge/gui-tkinter-green) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![GUI](https://img.shields.io/badge/gui-PySide6-41cd52) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ## Features
 
 - **Modern chat UI** — a sidebar of saved conversations, message bubbles aligned
   by sender, and a clean dark theme.
-- **Markdown & code rendering** — replies render with headings, bold/italic,
-  lists, and fenced **code blocks** that get a language label and a one-click
-  **Copy** button.
+- **Markdown & syntax highlighting** — replies render with headings,
+  bold/italic, lists, and fenced **code blocks** with real syntax highlighting
+  (Pygments), a language label, and a one-click **Copy** button.
 - **Streaming replies** — text appears token by token, on a background thread,
   so the window never freezes. The Send button becomes **Stop** mid-reply.
 - **Real conversations** — each chat keeps its full history, so the model
@@ -32,10 +32,10 @@ no cloud, nothing leaves your computer.
 
 ## Requirements
 
-- **Python 3.9+** with Tkinter (bundled with the python.org installer; on Linux
-  install `python3-tk`).
-- **[Ollama](https://ollama.com/download)** installed and running, with at least
-  one model pulled (or pull one from inside the app).
+- **Python 3.9+** (the GUI uses [PySide6 / Qt](https://doc.qt.io/qtforpython/),
+  installed by `pip` — see below).
+- **[Ollama](https://ollama.com/download)** installed and running. You don't need
+  a model up front — pull one from inside the app.
 
 ## Setup
 
@@ -99,9 +99,9 @@ Conversations and settings are stored as JSON under your platform's data dir
 
 ```
 ChatGPT-GUI/
-├── chatGPT.py        # Tkinter GUI: sidebar, bubbles, streaming, dialogs
+├── chatGPT.py        # PySide6 GUI: sidebar, bubbles, streaming, dialogs
 ├── requestLocal.py   # Ollama backend: models, streaming chat, pull/delete
-├── mdrender.py       # Markdown → Tkinter Text rendering
+├── mdrender.py       # Markdown + syntax highlighting (markdown + Pygments)
 ├── storage.py        # Conversation & settings persistence
 └── requirements.txt  # Python dependencies
 ```
@@ -120,9 +120,9 @@ python requestLocal.py
   (e.g. `llama3.1:8b`).
 - **Replies are slow** — that's the model, not the app. Try a smaller model or
   check your system resources.
-- **No window appears / `ModuleNotFoundError: tkinter`** — install Tkinter
-  (`python3-tk` on Debian/Ubuntu, included with the python.org macOS/Windows
-  installers).
+- **`pip install` fails on PySide6** — make sure you're on 64-bit Python 3.9+.
+  On Linux you may also need the usual Qt runtime libs (e.g. `libxcb`,
+  `libegl1`, `libgl1`) from your package manager.
 
 ## License
 

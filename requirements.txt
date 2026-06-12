@@ -1,1 +1,4 @@
 ollama>=0.4.0
+PySide6>=6.6
+markdown>=3.5
+Pygments>=2.17
