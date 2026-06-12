@@ -1,2 +1,4 @@
-requests>=2.31.0
-ollama>=0.1.6
+ollama>=0.4.0
+PySide6>=6.6
+markdown>=3.5
+Pygments>=2.17
