@@ -1,91 +1,101 @@
-# Local LLM Chat GUI
+# Local LLM Chat
 
-A simple Python-based GUI application that allows you to interact with local Large Language Models through Ollama. This application provides a chat interface with multiple tabs for different conversations.
+A small, no-frills desktop chat client for local language models served by
+[Ollama](https://ollama.com/). It runs entirely on your machine — no API keys,
+no cloud, nothing leaves your computer.
+
+![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![GUI](https://img.shields.io/badge/gui-tkinter-green)
 
 ## Features
 
-- Multiple chat tabs support
-- Local LLM integration via Ollama
-- Simple and intuitive interface
-- Real-time responses
-- Error handling and status messages
+- **Streaming replies** — text appears token by token as the model generates it.
+- **Non-blocking UI** — model calls run on a background thread, so the window
+  never freezes while you wait. You can stop a reply mid-stream.
+- **Real conversations** — each tab keeps its full history, so the model
+  remembers the thread (not just your last message).
+- **Multiple chats** — open several independent conversations in tabs.
+- **Live model list** — the model picker is populated from whatever you have
+  installed (`ollama list`); hit **Refresh** after pulling a new one. You can
+  also type any model name yourself.
+- **Clear, readable transcript** — your messages and the model's replies are
+  laid out as a chat, not raw JSON.
 
-## Prerequisites
+## Requirements
 
-Before using this application, you need to:
+- **Python 3.9+** with Tkinter (bundled with the python.org installer; on Linux
+  install `python3-tk`).
+- **[Ollama](https://ollama.com/download)** installed and running, with at least
+  one model pulled.
 
-1. Install Ollama on your system
-   - Visit [Ollama's website](https://ollama.ai/) to download and install
-   - Make sure the Ollama service is running
+## Setup
 
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+# 1. Clone
+git clone https://github.com/mbn-code/ChatGPT-GUI.git
+cd ChatGPT-GUI
 
-## Installation
+# 2. (recommended) create a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-1. Clone the repository:
-   ```bash
-   git clone [your-repository-url]
-   cd ChatGPT-GUI
-   ```
+# 3. Install dependencies
+pip install -r requirements.txt
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+# 4. Make sure Ollama is running and you have a model
+ollama serve                     # if it isn't already running
+ollama pull llama3.1:8b          # or any model you like
+```
 
-## Usage
+## Run
 
-1. Start Ollama service on your system
+```bash
+python chatGPT.py
+```
 
-2. Run the application:
-   ```bash
-   python chatGPT.py
-   ```
+Then:
 
-3. Using the Interface:
-   - Click "New Chat" to open a new chat tab
-   - Type your message and press Enter to send
-   - Use "Delete Chat" to remove the current tab
-   - The default model is "llama2" but can be modified in the code
+- Pick a model from the dropdown (or type one in).
+- Type a message and press **Enter** to send; **Shift+Enter** for a newline.
+- **Stop** cuts off a reply that's still streaming.
+- **New Chat** opens another tab; **Clear** wipes the current conversation;
+  **Delete Chat** closes the tab.
 
-## Technical Details
+### Connecting to a remote Ollama host
 
-The application is built using:
-- Python 3.x
-- Tkinter for GUI
-- Ollama for local LLM integration
-- Asynchronous request handling
+By default the app talks to `http://localhost:11434`. To point it elsewhere,
+set the standard Ollama environment variable before launching:
 
-### Project Structure
+```bash
+OLLAMA_HOST=http://192.168.1.50:11434 python chatGPT.py
+```
+
+## Project structure
+
 ```
 ChatGPT-GUI/
-├── chatGPT.py       # Main GUI application
-├── requestLocal.py  # Ollama integration
-└── requirements.txt # Python dependencies
+├── chatGPT.py        # Tkinter GUI: tabs, streaming, threading
+├── requestLocal.py   # Ollama backend: model list + streaming chat
+└── requirements.txt  # Python dependencies
 ```
 
-## Error Handling
+`requestLocal.py` can also be run on its own as a quick connectivity check:
 
-The application handles common errors including:
-- Ollama service not running
-- Model not found/not downloaded
-- Invalid inputs
-- Connection issues
+```bash
+python requestLocal.py
+```
 
 ## Troubleshooting
 
-1. If you get "Ollama server is not running" error:
-   - Check if Ollama is installed
-   - Verify Ollama service is running
-   - Restart Ollama service
-
-2. If model responses are slow:
-   - Check your system resources
-   - Consider using a lighter model
+- **"Ollama not reachable"** — make sure `ollama serve` is running, then click
+  **Refresh**.
+- **"Model isn't installed"** — pull it first: `ollama pull <model>`, then
+  **Refresh** the model list.
+- **Replies are slow** — that's the model, not the app. Try a smaller model
+  (e.g. `llama3.1:8b` instead of a 70B model) or check your system resources.
+- **No window appears / `ModuleNotFoundError: tkinter`** — install Tkinter
+  (`python3-tk` on Debian/Ubuntu, included with the python.org macOS/Windows
+  installers).
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests!
+Issues and pull requests are welcome.

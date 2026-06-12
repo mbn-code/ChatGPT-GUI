@@ -1,180 +1,382 @@
+"""A small desktop chat client for local LLMs served by Ollama.
+
+The app keeps the Tkinter event loop responsive by running every model call on
+a background thread and streaming the reply back to the UI through a queue, so
+the window never freezes while a model is thinking. Each tab is an independent
+conversation with its own history, so the model actually remembers the thread.
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
 import tkinter as tk
-from tkinter import ttk, filedialog
-import requests
-import json
-import asyncio 
+from tkinter import ttk
 from tkinter.font import Font
 
-from requestLocal import query_ollama
+import requestLocal as backend
 
-class GUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("AI Chat Assistant")
-        self.root.configure(bg='#2b2b2b')
-        
-        # Define colors and fonts
-        self.colors = {
-            'bg': '#2b2b2b',
-            'fg': '#000000',  # Changed to black
-            'input_bg': '#ffffff',  # Changed to white for better contrast
-            'button_bg': '#4a4a4a',
-            'accent': '#007acc'
-        }
-        
-        self.fonts = {
-            'main': Font(family="Segoe UI", size=10),
-            'chat': Font(family="Segoe UI", size=11),
-            'input': Font(family="Segoe UI", size=10)
-        }
-        
-        self.model_var = tk.StringVar(value="llama2")
-        self.status_var = tk.StringVar(value="")  # Add status variable
-        self.setup_styles()
-        self.create_widgets()
+POLL_MS = 40  # how often the UI drains worker output
 
-    def setup_styles(self):
-        style = ttk.Style()
-        style.configure('Custom.TNotebook', background=self.colors['bg'])
-        style.configure('Custom.TFrame', background=self.colors['bg'])
-        style.configure('Custom.TButton',
-                       background=self.colors['button_bg'],
-                       foreground='#000000',  # Changed to black
-                       padding=5)
-        style.configure('Custom.TEntry',
-                       fieldbackground=self.colors['input_bg'],
-                       foreground='#000000')  # Changed to black
+PALETTE = {
+    "bg": "#1e1e1e",
+    "panel": "#252526",
+    "input_bg": "#2d2d30",
+    "fg": "#e6e6e6",
+    "muted": "#9aa0a6",
+    "user": "#4ec9b0",
+    "assistant": "#dcdcdc",
+    "accent": "#0a84ff",
+    "error": "#f48771",
+    "border": "#3c3c3c",
+}
 
-    def create_widgets(self):
-        # Create main container
-        main_container = ttk.Frame(self.root, style='Custom.TFrame')
-        main_container.pack(fill='both', expand=True, padx=10, pady=10)
 
-        # Create top control panel
-        control_panel = ttk.Frame(main_container, style='Custom.TFrame')
-        control_panel.pack(fill='x', pady=(0, 10))
+class ChatTab:
+    """One conversation: a transcript, an input box, and its own history."""
 
-        # Add model selector
-        models = ['llama2', 'llama3:8b', 'llama3.1:8b', 'codellama']  # added new models
-        model_label = ttk.Label(control_panel, text="Model:", foreground='#000000')  # Changed to black
-        model_label.pack(side='left', padx=(0, 5))
-        model_dropdown = ttk.Combobox(control_panel, textvariable=self.model_var, values=models, width=15)
-        model_dropdown.pack(side='left', padx=5)
+    def __init__(self, app: "ChatApp", frame, chat_log, entry, send_btn, stop_btn):
+        self.app = app
+        self.frame = frame
+        self.chat_log = chat_log
+        self.entry = entry
+        self.send_btn = send_btn
+        self.stop_btn = stop_btn
 
-        # Add status label
-        self.status_label = ttk.Label(
-            control_panel, 
-            textvariable=self.status_var, 
-            foreground='#007acc',
-            background=self.colors['bg']
+        self.messages: list[dict] = []
+        self.queue: "queue.Queue" = queue.Queue()
+        self.stop_event = threading.Event()
+        self.generating = False
+        self.current_response = ""
+
+        self._configure_tags()
+        self._system(
+            "New conversation. Type a message and press Enter to send "
+            "(Shift+Enter for a new line)."
         )
-        self.status_label.pack(side='right', padx=5)
 
-        # Add buttons with improved styling
-        self.add_tab_button = ttk.Button(control_panel, text="New Chat", style='Custom.TButton', command=self.add_tab)
-        self.add_tab_button.pack(side='left', padx=5)
-        
-        self.delete_tab_button = ttk.Button(control_panel, text="Delete Chat", style='Custom.TButton', command=self.delete_tab)
-        self.delete_tab_button.pack(side='left', padx=5)
+    # ---- transcript rendering -------------------------------------------------
 
-        # Create notebook with custom styling
-        self.notebook = ttk.Notebook(main_container, style='Custom.TNotebook')
-        self.notebook.pack(fill='both', expand=True)
-        
-        # Add initial tab
+    def _configure_tags(self):
+        self.chat_log.tag_configure(
+            "user_label", foreground=PALETTE["user"], font=self.app.fonts["bold"],
+            spacing1=10, spacing3=2,
+        )
+        self.chat_log.tag_configure(
+            "asst_label", foreground=PALETTE["accent"], font=self.app.fonts["bold"],
+            spacing1=10, spacing3=2,
+        )
+        self.chat_log.tag_configure("user_text", foreground=PALETTE["fg"], lmargin1=8, lmargin2=8)
+        self.chat_log.tag_configure("asst_text", foreground=PALETTE["assistant"], lmargin1=8, lmargin2=8)
+        self.chat_log.tag_configure("error", foreground=PALETTE["error"], lmargin1=8, lmargin2=8, spacing1=6)
+        self.chat_log.tag_configure(
+            "system", foreground=PALETTE["muted"], font=self.app.fonts["italic"], spacing1=4,
+        )
+
+    def _write(self, text, tag):
+        self.chat_log.config(state="normal")
+        self.chat_log.insert("end", text, tag)
+        self.chat_log.see("end")
+        self.chat_log.config(state="disabled")
+
+    def _system(self, text):
+        self._write(text + "\n", "system")
+
+    def _append_user(self, text):
+        self._write("You\n", "user_label")
+        self._write(text + "\n", "user_text")
+
+    def _begin_assistant(self):
+        self._write("Assistant\n", "asst_label")
+
+    def _append_assistant_chunk(self, chunk):
+        self._write(chunk, "asst_text")
+
+    def _end_assistant(self):
+        self._write("\n", "asst_text")
+
+    def _append_error(self, message):
+        self._write("⚠ " + message + "\n", "error")
+
+    # ---- sending / streaming --------------------------------------------------
+
+    def send(self, _event=None):
+        if self.generating:
+            return "break"
+        text = self.entry.get("1.0", "end").strip()
+        if not text:
+            return "break"
+        self.entry.delete("1.0", "end")
+        self._append_user(text)
+        self.messages.append({"role": "user", "content": text})
+        self._start_generation()
+        return "break"
+
+    def _start_generation(self):
+        model = self.app.model_var.get().strip()
+        if not model:
+            self._append_error("Pick a model first.")
+            return
+        self.generating = True
+        self.stop_event.clear()
+        self.current_response = ""
+        self._set_busy(True)
+        self.app.set_status(f"{model} is thinking…")
+        self._begin_assistant()
+        snapshot = list(self.messages)
+        threading.Thread(target=self._worker, args=(model, snapshot), daemon=True).start()
+
+    def _worker(self, model, messages):
+        try:
+            for chunk in backend.chat_stream(model, messages, self.stop_event.is_set):
+                self.queue.put(("chunk", chunk))
+        except backend.OllamaError as exc:
+            self.queue.put(("error", str(exc)))
+        except Exception as exc:  # pragma: no cover - defensive
+            self.queue.put(("error", f"Unexpected error: {exc}"))
+        finally:
+            self.queue.put(("done", None))
+
+    def drain(self):
+        """Pull any pending worker output onto the transcript (main thread)."""
+        if not self.generating:
+            return
+        try:
+            while True:
+                kind, payload = self.queue.get_nowait()
+                if kind == "chunk":
+                    self.current_response += payload
+                    self._append_assistant_chunk(payload)
+                elif kind == "error":
+                    self._append_error(payload)
+                elif kind == "done":
+                    self._finish()
+        except queue.Empty:
+            pass
+
+    def _finish(self):
+        if self.current_response.strip():
+            self.messages.append({"role": "assistant", "content": self.current_response})
+        else:
+            self._system("(no response)")
+        self._end_assistant()
+        self.generating = False
+        self._set_busy(False)
+        self.app.set_status("Ready")
+
+    def stop(self):
+        if self.generating:
+            self.stop_event.set()
+            self.app.set_status("Stopping…")
+
+    def clear(self):
+        if self.generating:
+            self.stop()
+        self.messages.clear()
+        self.chat_log.config(state="normal")
+        self.chat_log.delete("1.0", "end")
+        self.chat_log.config(state="disabled")
+        self._system("Conversation cleared.")
+
+    def _set_busy(self, busy):
+        self.send_btn.config(state="disabled" if busy else "normal")
+        self.stop_btn.config(state="normal" if busy else "disabled")
+        self.entry.config(state="disabled" if busy else "normal")
+        if not busy:
+            self.entry.focus_set()
+
+
+class ChatApp:
+    """Top-level window: model picker, tabs, and the UI poll loop."""
+
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Local LLM Chat")
+        self.root.geometry("860x660")
+        self.root.minsize(620, 460)
+        self.root.configure(bg=PALETTE["bg"])
+
+        self.fonts = {
+            "main": Font(family="Helvetica", size=12),
+            "bold": Font(family="Helvetica", size=12, weight="bold"),
+            "italic": Font(family="Helvetica", size=11, slant="italic"),
+            "chat": Font(family="Helvetica", size=13),
+        }
+
+        self.model_var = tk.StringVar(value="")
+        self.status_var = tk.StringVar(value="")
+        self.tabs: list[ChatTab] = []
+        self.tab_by_id: dict[str, ChatTab] = {}
+
+        self._setup_styles()
+        self._build_ui()
+        self.refresh_models()
         self.add_tab()
+        self.root.after(POLL_MS, self._poll)
+
+    def _setup_styles(self):
+        style = ttk.Style()
+        # 'clam' actually honours custom colours on every platform (the native
+        # macOS/Windows themes largely ignore them).
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TFrame", background=PALETTE["bg"])
+        style.configure("Panel.TFrame", background=PALETTE["panel"])
+        style.configure("TLabel", background=PALETTE["bg"], foreground=PALETTE["fg"], font=self.fonts["main"])
+        style.configure("Panel.TLabel", background=PALETTE["panel"], foreground=PALETTE["fg"], font=self.fonts["main"])
+        style.configure("Status.TLabel", background=PALETTE["panel"], foreground=PALETTE["muted"], font=self.fonts["italic"])
+        style.configure(
+            "TButton", background=PALETTE["input_bg"], foreground=PALETTE["fg"],
+            font=self.fonts["main"], padding=6, borderwidth=0,
+        )
+        style.map(
+            "TButton",
+            background=[("active", PALETTE["border"]), ("disabled", PALETTE["panel"])],
+            foreground=[("disabled", PALETTE["muted"])],
+        )
+        style.configure(
+            "Accent.TButton", background=PALETTE["accent"], foreground="#ffffff",
+            font=self.fonts["bold"], padding=6, borderwidth=0,
+        )
+        style.map("Accent.TButton", background=[("active", "#0066cc"), ("disabled", PALETTE["panel"])])
+        style.configure(
+            "TCombobox", fieldbackground=PALETTE["input_bg"], background=PALETTE["input_bg"],
+            foreground=PALETTE["fg"], arrowcolor=PALETTE["fg"], padding=4,
+        )
+        style.configure(
+            "TNotebook", background=PALETTE["bg"], borderwidth=0, tabmargins=[2, 4, 2, 0],
+        )
+        style.configure(
+            "TNotebook.Tab", background=PALETTE["panel"], foreground=PALETTE["muted"],
+            padding=[12, 6], font=self.fonts["main"],
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", PALETTE["bg"])],
+            foreground=[("selected", PALETTE["fg"])],
+        )
+
+    def _build_ui(self):
+        container = ttk.Frame(self.root, style="TFrame")
+        container.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ---- top control panel ----
+        panel = ttk.Frame(container, style="Panel.TFrame")
+        panel.pack(fill="x", pady=(0, 8))
+
+        ttk.Label(panel, text="Model:", style="Panel.TLabel").pack(side="left", padx=(8, 4), pady=8)
+        self.model_combo = ttk.Combobox(panel, textvariable=self.model_var, width=22, style="TCombobox")
+        self.model_combo.pack(side="left", padx=4, pady=8)
+        ttk.Button(panel, text="↻ Refresh", command=self.refresh_models).pack(side="left", padx=4, pady=8)
+
+        ttk.Label(panel, textvariable=self.status_var, style="Status.TLabel").pack(side="right", padx=10)
+
+        ttk.Button(panel, text="New Chat", command=self.add_tab).pack(side="left", padx=4, pady=8)
+        ttk.Button(panel, text="Clear", command=self._clear_current).pack(side="left", padx=4, pady=8)
+        ttk.Button(panel, text="Delete Chat", command=self.delete_tab).pack(side="left", padx=4, pady=8)
+
+        # ---- tabs ----
+        self.notebook = ttk.Notebook(container, style="TNotebook")
+        self.notebook.pack(fill="both", expand=True)
 
     def add_tab(self):
-        tab = ttk.Frame(self.notebook, style='Custom.TFrame')
-        
-        # Create chat container
-        chat_container = ttk.Frame(tab, style='Custom.TFrame')
-        chat_container.pack(fill='both', expand=True, padx=5, pady=5)
+        frame = ttk.Frame(self.notebook, style="TFrame")
 
-        # Create chat log with custom styling
-        chat_log = tk.Text(chat_container,
-                          font=self.fonts['chat'],
-                          bg=self.colors['input_bg'],
-                          fg='#000000',  # Changed to black
-                          wrap='word',
-                          state='disabled')
-        chat_log.pack(fill='both', expand=True, pady=(0, 5))
+        chat_log = tk.Text(
+            frame, font=self.fonts["chat"], bg=PALETTE["input_bg"], fg=PALETTE["fg"],
+            wrap="word", state="disabled", relief="flat", padx=12, pady=10,
+            insertbackground=PALETTE["fg"], highlightthickness=0, borderwidth=0,
+        )
+        scrollbar = ttk.Scrollbar(frame, command=chat_log.yview)
+        chat_log.configure(yscrollcommand=scrollbar.set)
+        chat_log.pack(side="top", fill="both", expand=True, pady=(6, 6))
+        scrollbar.place(in_=chat_log, relx=1.0, rely=0, relheight=1.0, anchor="ne")
 
-        # Create input container
-        input_container = ttk.Frame(chat_container, style='Custom.TFrame')
-        input_container.pack(fill='x', pady=(5, 0))
+        input_row = ttk.Frame(frame, style="TFrame")
+        input_row.pack(side="bottom", fill="x")
 
-        # Create input field with custom styling
-        user_input = ttk.Entry(input_container,
-                              font=self.fonts['input'],
-                              style='Custom.TEntry')
-        user_input.pack(fill='x', side='left', expand=True, padx=(0, 5))
-        
-        # Add send button
-        send_button = ttk.Button(input_container,
-                                text="Send",
-                                style='Custom.TButton',
-                                command=lambda: self.send_request(chat_log, user_input))
-        send_button.pack(side='right')
+        entry = tk.Text(
+            input_row, font=self.fonts["main"], height=3, bg=PALETTE["input_bg"], fg=PALETTE["fg"],
+            wrap="word", relief="flat", padx=8, pady=6,
+            insertbackground=PALETTE["fg"], highlightthickness=1,
+            highlightbackground=PALETTE["border"], highlightcolor=PALETTE["accent"],
+        )
+        entry.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        # Bind enter key to send
-        user_input.bind('<Return>', lambda event: self.send_request(chat_log, user_input))
+        button_col = ttk.Frame(input_row, style="TFrame")
+        button_col.pack(side="right", fill="y")
+        send_btn = ttk.Button(button_col, text="Send", style="Accent.TButton")
+        send_btn.pack(side="top", fill="x", pady=(0, 4))
+        stop_btn = ttk.Button(button_col, text="Stop", state="disabled")
+        stop_btn.pack(side="top", fill="x")
 
-        self.notebook.add(tab, text=f"Chat {self.notebook.index('end') + 1}")
+        tab = ChatTab(self, frame, chat_log, entry, send_btn, stop_btn)
+        send_btn.config(command=tab.send)
+        stop_btn.config(command=tab.stop)
+        entry.bind("<Return>", tab.send)
+        entry.bind("<Shift-Return>", lambda e: (entry.insert("insert", "\n"), "break")[1])
+
+        self.tabs.append(tab)
+        self.tab_by_id[str(frame)] = tab
+        self.notebook.add(frame, text=f"Chat {len(self.tabs)}")
+        self.notebook.select(frame)
+        entry.focus_set()
+
+    def current_tab(self) -> ChatTab | None:
+        selected = self.notebook.select()
+        return self.tab_by_id.get(selected)
 
     def delete_tab(self):
-        current_tab = self.notebook.select()
-        if self.notebook.index(current_tab) > 0:
-            self.notebook.forget(current_tab)
+        if len(self.tabs) <= 1:
+            self.set_status("Can't delete the last chat.")
+            return
+        tab = self.current_tab()
+        if tab is None:
+            return
+        tab.stop()
+        self.notebook.forget(tab.frame)
+        self.tabs.remove(tab)
+        self.tab_by_id.pop(str(tab.frame), None)
+        self._renumber_tabs()
 
-    def send_request(self, chat_log, user_input):
-        selected_model = self.model_var.get()
-        input_text = user_input.get().strip()
+    def _renumber_tabs(self):
+        for index, tab in enumerate(self.tabs, start=1):
+            self.notebook.tab(tab.frame, text=f"Chat {index}")
 
-        if input_text and not input_text.isspace():
-            self.status_var.set("Processing request...")
-            response_data = query_ollama(selected_model, input_text)
-            
-            if 'error' in response_data:
-                if "downloading" in response_data['error'].lower():
-                    self.status_var.set("Downloading model... This may take several minutes depending on your internet and storage speed.")
-                    # You might want to implement a retry mechanism here
-                else:
-                    self.show_error_message(chat_log, response_data['error'])
-                    self.status_var.set("")
-            else:
-                formatted_response = json.dumps(response_data, indent=2)
-                self.show_output(chat_log, formatted_response)
-                self.status_var.set("")
+    def _clear_current(self):
+        tab = self.current_tab()
+        if tab is not None:
+            tab.clear()
+
+    def refresh_models(self):
+        models = backend.list_models()
+        if models:
+            self.model_combo["values"] = models
+            if self.model_var.get() not in models:
+                self.model_var.set(models[0])
+            self.set_status(f"{len(models)} model(s) available")
         else:
-            self.show_error_message(chat_log, "Please enter valid input text")
-            self.status_var.set("")
+            self.model_combo["values"] = backend.DEFAULT_MODELS
+            if not self.model_var.get():
+                self.model_var.set(backend.DEFAULT_MODELS[0])
+            self.set_status("Ollama not reachable — run 'ollama serve', then Refresh")
 
-        user_input.delete(0, 'end')
-    
+    def set_status(self, text):
+        self.status_var.set(text)
 
-    def show_output(self, chat_log, formatted_response):
-        chat_log.config(state='normal')
-        chat_log.tag_configure('assistant', foreground='#000000')  # Changed to black
-        chat_log.tag_configure('response', foreground='#000000')  # Changed to black
-        chat_log.tag_configure('error', foreground='#ff0000')  # Keep errors in red for visibility
-        chat_log.insert('end', "\n🤖 Assistant: ", 'assistant')
-        chat_log.insert('end', formatted_response + '\n', 'response')
-        chat_log.see('end')
-        chat_log.config(state='disabled')
+    def _poll(self):
+        for tab in self.tabs:
+            tab.drain()
+        self.root.after(POLL_MS, self._poll)
 
-    def show_error_message(self, chat_log, error_message):
-        chat_log.config(state='normal')
-        chat_log.insert('end', f"⚠️ Error: {error_message}\n", 'error')
-        chat_log.see('end')
-        chat_log.config(state='disabled')
 
-    @staticmethod
-    def query_huggingface_api(api_url, headers, payload):
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+def main():
+    root = tk.Tk()
+    ChatApp(root)
+    root.mainloop()
 
-root = tk.Tk()
-app = GUI(root)
-root.mainloop()
+
+if __name__ == "__main__":
+    main()
