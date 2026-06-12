@@ -8,17 +8,19 @@ no cloud, nothing leaves your computer.
 
 ## Features
 
+- **Modern chat UI** — a sidebar of conversations, message bubbles aligned by
+  sender, and a clean dark theme.
 - **Streaming replies** — text appears token by token as the model generates it.
 - **Non-blocking UI** — model calls run on a background thread, so the window
-  never freezes while you wait. You can stop a reply mid-stream.
-- **Real conversations** — each tab keeps its full history, so the model
-  remembers the thread (not just your last message).
-- **Multiple chats** — open several independent conversations in tabs.
-- **Live model list** — the model picker is populated from whatever you have
-  installed (`ollama list`); hit **Refresh** after pulling a new one. You can
-  also type any model name yourself.
-- **Clear, readable transcript** — your messages and the model's replies are
-  laid out as a chat, not raw JSON.
+  never freezes while you wait. The Send button turns into **Stop** mid-reply.
+- **Real conversations** — each chat keeps its full history, so the model
+  remembers the thread (not just your last message). Chats are auto-titled from
+  your first message.
+- **Multiple chats** — start as many as you like from the sidebar and switch
+  between them; each is independent.
+- **Models read from your system** — the picker is populated from whatever you
+  actually have installed (`ollama list`); nothing is hardcoded. Pull a new
+  model and hit **↻** to see it.
 
 ## Requirements
 
@@ -54,11 +56,12 @@ python chatGPT.py
 
 Then:
 
-- Pick a model from the dropdown (or type one in).
+- Pick a model from the dropdown in the top bar (use **↻** to refresh the list).
 - Type a message and press **Enter** to send; **Shift+Enter** for a newline.
-- **Stop** cuts off a reply that's still streaming.
-- **New Chat** opens another tab; **Clear** wipes the current conversation;
-  **Delete Chat** closes the tab.
+- While a reply streams, the **Send** button becomes **Stop** — click it to cut
+  the reply short.
+- Use **＋ New chat** in the sidebar to start another conversation, click a chat
+  to switch to it, and the **✕** next to a chat to delete it.
 
 ### Connecting to a remote Ollama host
 

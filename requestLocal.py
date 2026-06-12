@@ -12,10 +12,6 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import ollama
 
-# A small set of common models to fall back on when we can't reach the server
-# to ask what's actually installed.
-DEFAULT_MODELS: List[str] = ["llama3.1:8b", "llama3:8b", "llama2", "qwen2.5-coder:7b"]
-
 
 class OllamaError(Exception):
     """Raised for any failure talking to Ollama, with a user-readable message."""
@@ -88,7 +84,11 @@ def chat_stream(
                 yield content
     except ollama.ResponseError as exc:
         message = getattr(exc, "error", None) or str(exc)
-        if "not found" in message.lower() or "try pulling" in message.lower():
+        status = getattr(exc, "status_code", None)
+        # Only treat this as a missing model when Ollama actually says so (404 /
+        # "try pulling"). Other 5xx errors — e.g. a broken install — must surface
+        # their real message rather than a misleading "pull it first".
+        if status == 404 or "try pulling" in message.lower():
             raise OllamaError(
                 f"Model '{model}' isn't installed. Pull it first with:  ollama pull {model}"
             ) from exc
@@ -107,7 +107,9 @@ if __name__ == "__main__":
         raise SystemExit("Ollama server is not running. Start it with: ollama serve")
     available = list_models()
     print("Installed models:", available or "(none)")
-    target = available[0] if available else DEFAULT_MODELS[0]
+    if not available:
+        raise SystemExit("No models installed. Pull one with, e.g.: ollama pull llama3.1:8b")
+    target = available[0]
     print(f"\nAsking {target}: 'What is a cow in one sentence?'\n")
     for piece in chat_stream(target, [{"role": "user", "content": "What is a cow in one sentence?"}]):
         print(piece, end="", flush=True)

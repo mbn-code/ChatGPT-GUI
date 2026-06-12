@@ -1,9 +1,10 @@
 """A small desktop chat client for local LLMs served by Ollama.
 
-The app keeps the Tkinter event loop responsive by running every model call on
-a background thread and streaming the reply back to the UI through a queue, so
-the window never freezes while a model is thinking. Each tab is an independent
-conversation with its own history, so the model actually remembers the thread.
+The UI is a modern chat layout: a sidebar of conversations on the left, a
+scrolling transcript of message bubbles in the middle, and a composer at the
+bottom. Every model call runs on a background thread and streams its reply back
+to the UI through a queue, so the window never freezes and text appears as it's
+generated. Each conversation keeps its own history, so the model has context.
 """
 
 from __future__ import annotations
@@ -11,118 +12,246 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
-from tkinter.font import Font
 
 import requestLocal as backend
 
 POLL_MS = 40  # how often the UI drains worker output
 
-PALETTE = {
-    "bg": "#1e1e1e",
-    "panel": "#252526",
-    "input_bg": "#2d2d30",
-    "fg": "#e6e6e6",
-    "muted": "#9aa0a6",
-    "user": "#4ec9b0",
-    "assistant": "#dcdcdc",
-    "accent": "#0a84ff",
-    "error": "#f48771",
-    "border": "#3c3c3c",
+# A flat, modern dark palette.
+C = {
+    "app_bg": "#0f1117",
+    "sidebar": "#161922",
+    "sidebar_active": "#232838",
+    "sidebar_hover": "#1d2130",
+    "header": "#161922",
+    "chat_bg": "#0f1117",
+    "composer": "#1b1f2b",
+    "composer_border": "#2a3042",
+    "bubble_user": "#3b6ef5",
+    "bubble_user_fg": "#ffffff",
+    "bubble_asst": "#1e2330",
+    "bubble_asst_fg": "#e7e9ee",
+    "text": "#e7e9ee",
+    "muted": "#878da0",
+    "faint": "#5b6273",
+    "accent": "#3b6ef5",
+    "accent_hover": "#2f5be0",
+    "danger": "#e2554e",
+    "danger_hover": "#c8453f",
+    "border": "#242838",
 }
 
 
-class ChatTab:
-    """One conversation: a transcript, an input box, and its own history."""
+def _pick_family(root, *preferences):
+    """Return the first installed font family from preferences, else a default."""
+    available = set(tkfont.families(root))
+    for name in preferences:
+        if name in available:
+            return name
+    return preferences[-1]
 
-    def __init__(self, app: "ChatApp", frame, chat_log, entry, send_btn, stop_btn):
+
+class Conversation:
+    """One chat thread: its own page (transcript + composer) and history."""
+
+    def __init__(self, app: "ChatApp"):
         self.app = app
-        self.frame = frame
-        self.chat_log = chat_log
-        self.entry = entry
-        self.send_btn = send_btn
-        self.stop_btn = stop_btn
-
+        self.title = "New chat"
         self.messages: list[dict] = []
         self.queue: "queue.Queue" = queue.Queue()
         self.stop_event = threading.Event()
         self.generating = False
         self.current_response = ""
 
-        self._configure_tags()
-        self._system(
-            "New conversation. Type a message and press Enter to send "
-            "(Shift+Enter for a new line)."
-        )
+        self._bubbles: list[dict] = []   # {"label", "frac"} for reflow
+        self._stream_label = None
+        self._stream_frac = 0.80
+        self.placeholder = None
 
-    # ---- transcript rendering -------------------------------------------------
+        self.side_row = None             # sidebar widgets (set by app)
+        self.side_label = None
 
-    def _configure_tags(self):
-        self.chat_log.tag_configure(
-            "user_label", foreground=PALETTE["user"], font=self.app.fonts["bold"],
-            spacing1=10, spacing3=2,
-        )
-        self.chat_log.tag_configure(
-            "asst_label", foreground=PALETTE["accent"], font=self.app.fonts["bold"],
-            spacing1=10, spacing3=2,
-        )
-        self.chat_log.tag_configure("user_text", foreground=PALETTE["fg"], lmargin1=8, lmargin2=8)
-        self.chat_log.tag_configure("asst_text", foreground=PALETTE["assistant"], lmargin1=8, lmargin2=8)
-        self.chat_log.tag_configure("error", foreground=PALETTE["error"], lmargin1=8, lmargin2=8, spacing1=6)
-        self.chat_log.tag_configure(
-            "system", foreground=PALETTE["muted"], font=self.app.fonts["italic"], spacing1=4,
-        )
+        self._build_page()
 
-    def _write(self, text, tag):
-        self.chat_log.config(state="normal")
-        self.chat_log.insert("end", text, tag)
-        self.chat_log.see("end")
-        self.chat_log.config(state="disabled")
+    # ---- page construction ----------------------------------------------------
 
-    def _system(self, text):
-        self._write(text + "\n", "system")
+    def _build_page(self):
+        self.page = tk.Frame(self.app.content, bg=C["chat_bg"])
 
-    def _append_user(self, text):
-        self._write("You\n", "user_label")
-        self._write(text + "\n", "user_text")
+        # Scrolling transcript --------------------------------------------------
+        area = tk.Frame(self.page, bg=C["chat_bg"])
+        area.pack(side="top", fill="both", expand=True)
 
-    def _begin_assistant(self):
-        self._write("Assistant\n", "asst_label")
+        self.canvas = tk.Canvas(area, bg=C["chat_bg"], highlightthickness=0, bd=0)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scroll = ttk.Scrollbar(area, orient="vertical", command=self.canvas.yview,
+                               style="Chat.Vertical.TScrollbar")
+        scroll.pack(side="right", fill="y")
+        self.canvas.configure(yscrollcommand=scroll.set)
 
-    def _append_assistant_chunk(self, chunk):
-        self._write(chunk, "asst_text")
+        self.inner = tk.Frame(self.canvas, bg=C["chat_bg"])
+        self._window = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
 
-    def _end_assistant(self):
-        self._write("\n", "asst_text")
+        self.inner.bind("<Configure>",
+                        lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
+        self.canvas.bind("<Enter>", lambda e: self._bind_wheel())
+        self.canvas.bind("<Leave>", lambda e: self._unbind_wheel())
 
-    def _append_error(self, message):
-        self._write("⚠ " + message + "\n", "error")
+        self._show_placeholder()
+
+        # Composer --------------------------------------------------------------
+        bar = tk.Frame(self.page, bg=C["chat_bg"])
+        bar.pack(side="bottom", fill="x", padx=18, pady=(6, 16))
+
+        box = tk.Frame(bar, bg=C["composer"], highlightthickness=1,
+                       highlightbackground=C["composer_border"],
+                       highlightcolor=C["accent"])
+        box.pack(fill="x")
+
+        # Pack the button first: a left-side widget with expand=True would
+        # otherwise claim the whole row and leave the button unmapped.
+        self.send_btn = tk.Label(box, text="Send", bg=C["accent"], fg="#ffffff",
+                                 font=self.app.fonts["bold"], padx=18, pady=8, cursor="hand2")
+        self.send_btn.pack(side="right", padx=8, pady=8)
+        self.send_btn.bind("<Button-1>", lambda e: self._on_action())
+        self._hover(self.send_btn, C["accent"], C["accent_hover"])
+
+        self.input = tk.Text(box, height=1, bg=C["composer"], fg=C["text"],
+                             wrap="word", relief="flat", bd=0, padx=14, pady=12,
+                             insertbackground=C["text"], font=self.app.fonts["body"],
+                             highlightthickness=0)
+        self.input.pack(side="left", fill="both", expand=True)
+
+        self.input.bind("<Return>", self._on_return)
+        self.input.bind("<Shift-Return>", lambda e: None)  # allow newline
+        self.input.bind("<KeyRelease>", self._autosize_input)
+
+    # ---- placeholder / empty state -------------------------------------------
+
+    def _show_placeholder(self):
+        self.placeholder = tk.Frame(self.inner, bg=C["chat_bg"])
+        self.placeholder.pack(fill="x", pady=(140, 0))
+        tk.Label(self.placeholder, text="Ask anything", bg=C["chat_bg"], fg=C["text"],
+                 font=self.app.fonts["title"]).pack()
+        tk.Label(self.placeholder, text="Your messages stay on this machine, served locally by Ollama.",
+                 bg=C["chat_bg"], fg=C["muted"], font=self.app.fonts["small"]).pack(pady=(6, 0))
+
+    def _clear_placeholder(self):
+        if self.placeholder is not None:
+            self.placeholder.destroy()
+            self.placeholder = None
+
+    # ---- scrolling ------------------------------------------------------------
+
+    def _on_canvas_resize(self, event):
+        self.canvas.itemconfig(self._window, width=event.width)
+        for b in self._bubbles:
+            b["label"].configure(wraplength=max(220, int(event.width * b["frac"])))
+
+    def _bind_wheel(self):
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+        self.canvas.bind_all("<Button-4>", self._on_wheel)
+        self.canvas.bind_all("<Button-5>", self._on_wheel)
+
+    def _unbind_wheel(self):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
+    def _on_wheel(self, event):
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        elif abs(event.delta) >= 120:          # Windows
+            delta = -int(event.delta / 120)
+        else:                                   # macOS
+            delta = -event.delta
+        self.canvas.yview_scroll(delta, "units")
+
+    def _near_bottom(self):
+        try:
+            return self.canvas.yview()[1] >= 0.999
+        except tk.TclError:
+            return True
+
+    def _scroll_to_bottom(self):
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.yview_moveto(1.0)
+
+    # ---- bubbles --------------------------------------------------------------
+
+    def _add_bubble(self, text, *, role):
+        self._clear_placeholder()
+        stick = self._near_bottom()
+
+        user = role == "user"
+        frac = 0.72 if user else 0.80
+        bg = C["bubble_user"] if user else C["bubble_asst"]
+        fg = C["bubble_user_fg"] if user else C["bubble_asst_fg"]
+
+        row = tk.Frame(self.inner, bg=C["chat_bg"])
+        row.pack(fill="x", padx=16, pady=(8, 0))
+
+        col = tk.Frame(row, bg=C["chat_bg"])
+        col.pack(side="right" if user else "left", anchor="e" if user else "w")
+
+        caption = "You" if user else self.app.model_var.get() or "Assistant"
+        tk.Label(col, text=caption, bg=C["chat_bg"], fg=C["faint"],
+                 font=self.app.fonts["caption"]).pack(anchor="e" if user else "w",
+                                                       padx=4, pady=(0, 2))
+
+        wrap = max(220, int(self.canvas.winfo_width() * frac))
+        label = tk.Label(col, text=text, bg=bg, fg=fg, justify="left", anchor="w",
+                         wraplength=wrap, font=self.app.fonts["body"], padx=14, pady=10)
+        label.pack(anchor="e" if user else "w")
+
+        self._bubbles.append({"label": label, "frac": frac})
+        if stick:
+            self._scroll_to_bottom()
+        return label
 
     # ---- sending / streaming --------------------------------------------------
 
-    def send(self, _event=None):
-        if self.generating:
-            return "break"
-        text = self.entry.get("1.0", "end").strip()
-        if not text:
-            return "break"
-        self.entry.delete("1.0", "end")
-        self._append_user(text)
-        self.messages.append({"role": "user", "content": text})
-        self._start_generation()
+    def _on_return(self, _event):
+        self._on_action()
         return "break"
 
-    def _start_generation(self):
+    def _on_action(self):
+        if self.generating:
+            self.stop()
+        else:
+            self.send()
+
+    def send(self):
+        if self.generating:
+            return
+        text = self.input.get("1.0", "end").strip()
+        if not text:
+            return
         model = self.app.model_var.get().strip()
         if not model:
-            self._append_error("Pick a model first.")
+            self.app.set_status("No model selected — pull one with 'ollama pull <name>', then ↻")
             return
+
+        self.input.delete("1.0", "end")
+        self._autosize_input()
+        self._add_bubble(text, role="user")
+        self.messages.append({"role": "user", "content": text})
+        if len(self.messages) == 1:
+            self.set_title(text)
+
         self.generating = True
         self.stop_event.clear()
         self.current_response = ""
         self._set_busy(True)
         self.app.set_status(f"{model} is thinking…")
-        self._begin_assistant()
+        self._stream_label = self._add_bubble("…", role="assistant")
+
         snapshot = list(self.messages)
         threading.Thread(target=self._worker, args=(model, snapshot), daemon=True).start()
 
@@ -138,7 +267,7 @@ class ChatTab:
             self.queue.put(("done", None))
 
     def drain(self):
-        """Pull any pending worker output onto the transcript (main thread)."""
+        """Apply pending worker output on the main thread."""
         if not self.generating:
             return
         try:
@@ -146,9 +275,16 @@ class ChatTab:
                 kind, payload = self.queue.get_nowait()
                 if kind == "chunk":
                     self.current_response += payload
-                    self._append_assistant_chunk(payload)
+                    stick = self._near_bottom()
+                    self._stream_label.configure(text=self.current_response)
+                    if stick:
+                        self._scroll_to_bottom()
                 elif kind == "error":
-                    self._append_error(payload)
+                    self.current_response = ""
+                    if self._stream_label is not None:
+                        self._stream_label.configure(
+                            text="⚠ " + payload, bg="#2a1b1d", fg=C["danger"])
+                    self.app.set_status("Error")
                 elif kind == "done":
                     self._finish()
         except queue.Empty:
@@ -157,9 +293,9 @@ class ChatTab:
     def _finish(self):
         if self.current_response.strip():
             self.messages.append({"role": "assistant", "content": self.current_response})
-        else:
-            self._system("(no response)")
-        self._end_assistant()
+        elif self._stream_label is not None and self._stream_label["text"] == "…":
+            self._stream_label.configure(text="(no response)", fg=C["muted"])
+        self._stream_label = None
         self.generating = False
         self._set_busy(False)
         self.app.set_status("Ready")
@@ -173,202 +309,248 @@ class ChatTab:
         if self.generating:
             self.stop()
         self.messages.clear()
-        self.chat_log.config(state="normal")
-        self.chat_log.delete("1.0", "end")
-        self.chat_log.config(state="disabled")
-        self._system("Conversation cleared.")
+        self._bubbles.clear()
+        for child in self.inner.winfo_children():
+            child.destroy()
+        self.placeholder = None
+        self._show_placeholder()
+
+    def set_title(self, text):
+        clean = " ".join(text.split())
+        self.title = (clean[:30] + "…") if len(clean) > 31 else clean or "New chat"
+        if self.side_label is not None:
+            self.side_label.configure(text=self.title)
+        if self.app.active is self:
+            self.app.header_title.configure(text=self.title)
+
+    # ---- widget state ---------------------------------------------------------
 
     def _set_busy(self, busy):
-        self.send_btn.config(state="disabled" if busy else "normal")
-        self.stop_btn.config(state="normal" if busy else "disabled")
-        self.entry.config(state="disabled" if busy else "normal")
-        if not busy:
-            self.entry.focus_set()
+        if busy:
+            self.send_btn.configure(text="Stop", bg=C["danger"])
+            self._hover(self.send_btn, C["danger"], C["danger_hover"])
+        else:
+            self.send_btn.configure(text="Send", bg=C["accent"])
+            self._hover(self.send_btn, C["accent"], C["accent_hover"])
+            self.input.focus_set()
+
+    def _autosize_input(self, _event=None):
+        lines = int(self.input.index("end-1c").split(".")[0])
+        self.input.configure(height=max(1, min(lines, 6)))
+
+    def _hover(self, widget, base, hover):
+        widget.bind("<Enter>", lambda e: widget.configure(bg=hover))
+        widget.bind("<Leave>", lambda e: widget.configure(bg=base))
 
 
 class ChatApp:
-    """Top-level window: model picker, tabs, and the UI poll loop."""
+    """Top-level window: sidebar, header, conversation pages, and the poll loop."""
 
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Local LLM Chat")
-        self.root.geometry("860x660")
-        self.root.minsize(620, 460)
-        self.root.configure(bg=PALETTE["bg"])
+        self.root.geometry("960x680")
+        self.root.minsize(720, 480)
+        self.root.configure(bg=C["app_bg"])
 
+        ui = _pick_family(root, "SF Pro Text", "Segoe UI", "Helvetica Neue", "Helvetica", "Arial")
         self.fonts = {
-            "main": Font(family="Helvetica", size=12),
-            "bold": Font(family="Helvetica", size=12, weight="bold"),
-            "italic": Font(family="Helvetica", size=11, slant="italic"),
-            "chat": Font(family="Helvetica", size=13),
+            "title": tkfont.Font(family=ui, size=20, weight="bold"),
+            "header": tkfont.Font(family=ui, size=14, weight="bold"),
+            "bold": tkfont.Font(family=ui, size=12, weight="bold"),
+            "body": tkfont.Font(family=ui, size=13),
+            "small": tkfont.Font(family=ui, size=11),
+            "caption": tkfont.Font(family=ui, size=10),
         }
 
         self.model_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
-        self.tabs: list[ChatTab] = []
-        self.tab_by_id: dict[str, ChatTab] = {}
+        self.conversations: list[Conversation] = []
+        self.active: Conversation | None = None
 
         self._setup_styles()
         self._build_ui()
         self.refresh_models()
-        self.add_tab()
+        self.new_conversation()
         self.root.after(POLL_MS, self._poll)
 
     def _setup_styles(self):
         style = ttk.Style()
-        # 'clam' actually honours custom colours on every platform (the native
-        # macOS/Windows themes largely ignore them).
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("TFrame", background=PALETTE["bg"])
-        style.configure("Panel.TFrame", background=PALETTE["panel"])
-        style.configure("TLabel", background=PALETTE["bg"], foreground=PALETTE["fg"], font=self.fonts["main"])
-        style.configure("Panel.TLabel", background=PALETTE["panel"], foreground=PALETTE["fg"], font=self.fonts["main"])
-        style.configure("Status.TLabel", background=PALETTE["panel"], foreground=PALETTE["muted"], font=self.fonts["italic"])
-        style.configure(
-            "TButton", background=PALETTE["input_bg"], foreground=PALETTE["fg"],
-            font=self.fonts["main"], padding=6, borderwidth=0,
-        )
-        style.map(
-            "TButton",
-            background=[("active", PALETTE["border"]), ("disabled", PALETTE["panel"])],
-            foreground=[("disabled", PALETTE["muted"])],
-        )
-        style.configure(
-            "Accent.TButton", background=PALETTE["accent"], foreground="#ffffff",
-            font=self.fonts["bold"], padding=6, borderwidth=0,
-        )
-        style.map("Accent.TButton", background=[("active", "#0066cc"), ("disabled", PALETTE["panel"])])
-        style.configure(
-            "TCombobox", fieldbackground=PALETTE["input_bg"], background=PALETTE["input_bg"],
-            foreground=PALETTE["fg"], arrowcolor=PALETTE["fg"], padding=4,
-        )
-        style.configure(
-            "TNotebook", background=PALETTE["bg"], borderwidth=0, tabmargins=[2, 4, 2, 0],
-        )
-        style.configure(
-            "TNotebook.Tab", background=PALETTE["panel"], foreground=PALETTE["muted"],
-            padding=[12, 6], font=self.fonts["main"],
-        )
-        style.map(
-            "TNotebook.Tab",
-            background=[("selected", PALETTE["bg"])],
-            foreground=[("selected", PALETTE["fg"])],
-        )
+        style.configure("Chat.Vertical.TScrollbar", troughcolor=C["chat_bg"],
+                        background=C["border"], bordercolor=C["chat_bg"],
+                        arrowcolor=C["muted"], relief="flat", borderwidth=0)
+        style.map("Chat.Vertical.TScrollbar", background=[("active", C["faint"])])
+        style.configure("Model.TCombobox", fieldbackground=C["sidebar_active"],
+                        background=C["sidebar_active"], foreground=C["text"],
+                        arrowcolor=C["text"], bordercolor=C["border"],
+                        lightcolor=C["border"], darkcolor=C["border"], padding=5)
+        # readonly is its own ttk state — without these maps the field renders
+        # as a white box with a highlighted selection.
+        style.map("Model.TCombobox",
+                  fieldbackground=[("readonly", C["sidebar_active"]), ("disabled", C["header"])],
+                  foreground=[("readonly", C["text"]), ("disabled", C["faint"])],
+                  background=[("readonly", C["sidebar_active"])],
+                  arrowcolor=[("readonly", C["text"]), ("disabled", C["faint"])],
+                  selectbackground=[("readonly", C["sidebar_active"])],
+                  selectforeground=[("readonly", C["text"])])
+        self.root.option_add("*TCombobox*Listbox.background", C["sidebar_active"])
+        self.root.option_add("*TCombobox*Listbox.foreground", C["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
+        self.root.option_add("*TCombobox*Listbox.font", self.fonts["body"])
 
     def _build_ui(self):
-        container = ttk.Frame(self.root, style="TFrame")
-        container.pack(fill="both", expand=True, padx=10, pady=10)
+        outer = tk.Frame(self.root, bg=C["app_bg"])
+        outer.pack(fill="both", expand=True)
 
-        # ---- top control panel ----
-        panel = ttk.Frame(container, style="Panel.TFrame")
-        panel.pack(fill="x", pady=(0, 8))
+        # ---- sidebar ----
+        sidebar = tk.Frame(outer, bg=C["sidebar"], width=230)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
 
-        ttk.Label(panel, text="Model:", style="Panel.TLabel").pack(side="left", padx=(8, 4), pady=8)
-        self.model_combo = ttk.Combobox(panel, textvariable=self.model_var, width=22, style="TCombobox")
-        self.model_combo.pack(side="left", padx=4, pady=8)
-        ttk.Button(panel, text="↻ Refresh", command=self.refresh_models).pack(side="left", padx=4, pady=8)
+        brand = tk.Frame(sidebar, bg=C["sidebar"])
+        brand.pack(fill="x", padx=16, pady=(16, 8))
+        tk.Label(brand, text="💬  Local Chat", bg=C["sidebar"], fg=C["text"],
+                 font=self.fonts["header"]).pack(side="left")
 
-        ttk.Label(panel, textvariable=self.status_var, style="Status.TLabel").pack(side="right", padx=10)
+        new_btn = tk.Label(sidebar, text="＋   New chat", bg=C["sidebar_active"], fg=C["text"],
+                           font=self.fonts["bold"], padx=14, pady=10, cursor="hand2", anchor="w")
+        new_btn.pack(fill="x", padx=12, pady=(4, 10))
+        new_btn.bind("<Button-1>", lambda e: self.new_conversation())
+        new_btn.bind("<Enter>", lambda e: new_btn.configure(bg=C["sidebar_hover"]))
+        new_btn.bind("<Leave>", lambda e: new_btn.configure(bg=C["sidebar_active"]))
 
-        ttk.Button(panel, text="New Chat", command=self.add_tab).pack(side="left", padx=4, pady=8)
-        ttk.Button(panel, text="Clear", command=self._clear_current).pack(side="left", padx=4, pady=8)
-        ttk.Button(panel, text="Delete Chat", command=self.delete_tab).pack(side="left", padx=4, pady=8)
+        self.side_list = tk.Frame(sidebar, bg=C["sidebar"])
+        self.side_list.pack(fill="both", expand=True, padx=8)
 
-        # ---- tabs ----
-        self.notebook = ttk.Notebook(container, style="TNotebook")
-        self.notebook.pack(fill="both", expand=True)
+        # ---- main area ----
+        main = tk.Frame(outer, bg=C["app_bg"])
+        main.pack(side="left", fill="both", expand=True)
 
-    def add_tab(self):
-        frame = ttk.Frame(self.notebook, style="TFrame")
+        header = tk.Frame(main, bg=C["header"], height=58)
+        header.pack(side="top", fill="x")
+        header.pack_propagate(False)
 
-        chat_log = tk.Text(
-            frame, font=self.fonts["chat"], bg=PALETTE["input_bg"], fg=PALETTE["fg"],
-            wrap="word", state="disabled", relief="flat", padx=12, pady=10,
-            insertbackground=PALETTE["fg"], highlightthickness=0, borderwidth=0,
-        )
-        scrollbar = ttk.Scrollbar(frame, command=chat_log.yview)
-        chat_log.configure(yscrollcommand=scrollbar.set)
-        chat_log.pack(side="top", fill="both", expand=True, pady=(6, 6))
-        scrollbar.place(in_=chat_log, relx=1.0, rely=0, relheight=1.0, anchor="ne")
+        self.header_title = tk.Label(header, text="New chat", bg=C["header"], fg=C["text"],
+                                     font=self.fonts["header"])
+        self.header_title.pack(side="left", padx=20)
 
-        input_row = ttk.Frame(frame, style="TFrame")
-        input_row.pack(side="bottom", fill="x")
+        refresh = tk.Label(header, text="↻", bg=C["header"], fg=C["muted"],
+                           font=self.fonts["header"], cursor="hand2")
+        refresh.pack(side="right", padx=(6, 16))
+        refresh.bind("<Button-1>", lambda e: self.refresh_models())
+        refresh.bind("<Enter>", lambda e: refresh.configure(fg=C["text"]))
+        refresh.bind("<Leave>", lambda e: refresh.configure(fg=C["muted"]))
 
-        entry = tk.Text(
-            input_row, font=self.fonts["main"], height=3, bg=PALETTE["input_bg"], fg=PALETTE["fg"],
-            wrap="word", relief="flat", padx=8, pady=6,
-            insertbackground=PALETTE["fg"], highlightthickness=1,
-            highlightbackground=PALETTE["border"], highlightcolor=PALETTE["accent"],
-        )
-        entry.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        self.model_combo = ttk.Combobox(header, textvariable=self.model_var, width=20,
+                                        state="readonly", style="Model.TCombobox",
+                                        font=self.fonts["body"])
+        self.model_combo.pack(side="right", pady=12)
+        tk.Label(header, text="Model", bg=C["header"], fg=C["muted"],
+                 font=self.fonts["small"]).pack(side="right", padx=(0, 8))
 
-        button_col = ttk.Frame(input_row, style="TFrame")
-        button_col.pack(side="right", fill="y")
-        send_btn = ttk.Button(button_col, text="Send", style="Accent.TButton")
-        send_btn.pack(side="top", fill="x", pady=(0, 4))
-        stop_btn = ttk.Button(button_col, text="Stop", state="disabled")
-        stop_btn.pack(side="top", fill="x")
+        self.content = tk.Frame(main, bg=C["chat_bg"])
+        self.content.pack(side="top", fill="both", expand=True)
 
-        tab = ChatTab(self, frame, chat_log, entry, send_btn, stop_btn)
-        send_btn.config(command=tab.send)
-        stop_btn.config(command=tab.stop)
-        entry.bind("<Return>", tab.send)
-        entry.bind("<Shift-Return>", lambda e: (entry.insert("insert", "\n"), "break")[1])
+        status = tk.Frame(main, bg=C["header"], height=26)
+        status.pack(side="bottom", fill="x")
+        status.pack_propagate(False)
+        tk.Label(status, textvariable=self.status_var, bg=C["header"], fg=C["muted"],
+                 font=self.fonts["small"]).pack(side="left", padx=20)
 
-        self.tabs.append(tab)
-        self.tab_by_id[str(frame)] = tab
-        self.notebook.add(frame, text=f"Chat {len(self.tabs)}")
-        self.notebook.select(frame)
-        entry.focus_set()
+    # ---- conversation management ----------------------------------------------
 
-    def current_tab(self) -> ChatTab | None:
-        selected = self.notebook.select()
-        return self.tab_by_id.get(selected)
+    def new_conversation(self):
+        conv = Conversation(self)
+        self.conversations.append(conv)
+        self._add_sidebar_row(conv)
+        self.show(conv)
 
-    def delete_tab(self):
-        if len(self.tabs) <= 1:
-            self.set_status("Can't delete the last chat.")
+    def _add_sidebar_row(self, conv):
+        row = tk.Frame(self.side_list, bg=C["sidebar"])
+        row.pack(fill="x", pady=2)
+        label = tk.Label(row, text=conv.title, bg=C["sidebar"], fg=C["muted"],
+                         font=self.fonts["body"], anchor="w", padx=10, pady=8, cursor="hand2")
+        label.pack(side="left", fill="x", expand=True)
+        delete = tk.Label(row, text="✕", bg=C["sidebar"], fg=C["faint"],
+                          font=self.fonts["small"], padx=8, cursor="hand2")
+        delete.pack(side="right")
+
+        conv.side_row = row
+        conv.side_label = label
+        label.bind("<Button-1>", lambda e: self.show(conv))
+        row.bind("<Button-1>", lambda e: self.show(conv))
+        delete.bind("<Button-1>", lambda e: self.delete_conversation(conv))
+        delete.bind("<Enter>", lambda e: delete.configure(fg=C["danger"]))
+        delete.bind("<Leave>", lambda e: delete.configure(fg=C["faint"]))
+        self._style_sidebar()
+
+    def show(self, conv):
+        if self.active is conv:
+            self._style_sidebar()
             return
-        tab = self.current_tab()
-        if tab is None:
+        if self.active is not None:
+            self.active.page.pack_forget()
+        self.active = conv
+        conv.page.pack(fill="both", expand=True)
+        self.header_title.configure(text=conv.title)
+        self._style_sidebar()
+        conv.input.focus_set()
+
+    def delete_conversation(self, conv):
+        if len(self.conversations) <= 1:
+            conv.clear()
+            conv.set_title("New chat")
+            self.set_status("That's the last chat — cleared it instead.")
             return
-        tab.stop()
-        self.notebook.forget(tab.frame)
-        self.tabs.remove(tab)
-        self.tab_by_id.pop(str(tab.frame), None)
-        self._renumber_tabs()
+        conv.stop()
+        was_active = self.active is conv
+        idx = self.conversations.index(conv)
+        conv.page.destroy()
+        conv.side_row.destroy()
+        self.conversations.remove(conv)
+        if was_active:
+            self.active = None
+            self.show(self.conversations[min(idx, len(self.conversations) - 1)])
+        else:
+            self._style_sidebar()
 
-    def _renumber_tabs(self):
-        for index, tab in enumerate(self.tabs, start=1):
-            self.notebook.tab(tab.frame, text=f"Chat {index}")
+    def _style_sidebar(self):
+        for conv in self.conversations:
+            active = conv is self.active
+            bg = C["sidebar_active"] if active else C["sidebar"]
+            conv.side_row.configure(bg=bg)
+            conv.side_label.configure(bg=bg, fg=C["text"] if active else C["muted"])
+            for child in conv.side_row.winfo_children():
+                if child is not conv.side_label:
+                    child.configure(bg=bg)
 
-    def _clear_current(self):
-        tab = self.current_tab()
-        if tab is not None:
-            tab.clear()
+    # ---- models ---------------------------------------------------------------
 
     def refresh_models(self):
         models = backend.list_models()
         if models:
-            self.model_combo["values"] = models
+            self.model_combo.configure(values=models, state="readonly")
             if self.model_var.get() not in models:
                 self.model_var.set(models[0])
-            self.set_status(f"{len(models)} model(s) available")
+            self.set_status(f"{len(models)} model(s) installed · {self.model_var.get()}")
         else:
-            self.model_combo["values"] = backend.DEFAULT_MODELS
-            if not self.model_var.get():
-                self.model_var.set(backend.DEFAULT_MODELS[0])
-            self.set_status("Ollama not reachable — run 'ollama serve', then Refresh")
+            self.model_combo.configure(values=[], state="disabled")
+            self.model_var.set("")
+            if backend.is_running():
+                self.set_status("No models installed — pull one: ollama pull llama3.1:8b, then ↻")
+            else:
+                self.set_status("Ollama not reachable — start it with 'ollama serve', then ↻")
 
     def set_status(self, text):
         self.status_var.set(text)
 
     def _poll(self):
-        for tab in self.tabs:
-            tab.drain()
+        for conv in self.conversations:
+            conv.drain()
         self.root.after(POLL_MS, self._poll)
 
 
