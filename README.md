@@ -1,33 +1,41 @@
 # Local LLM Chat
 
-A small, no-frills desktop chat client for local language models served by
+A polished desktop chat client for local language models served by
 [Ollama](https://ollama.com/). It runs entirely on your machine — no API keys,
 no cloud, nothing leaves your computer.
 
-![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![GUI](https://img.shields.io/badge/gui-tkinter-green)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![GUI](https://img.shields.io/badge/gui-tkinter-green) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ## Features
 
-- **Modern chat UI** — a sidebar of conversations, message bubbles aligned by
-  sender, and a clean dark theme.
-- **Streaming replies** — text appears token by token as the model generates it.
-- **Non-blocking UI** — model calls run on a background thread, so the window
-  never freezes while you wait. The Send button turns into **Stop** mid-reply.
+- **Modern chat UI** — a sidebar of saved conversations, message bubbles aligned
+  by sender, and a clean dark theme.
+- **Markdown & code rendering** — replies render with headings, bold/italic,
+  lists, and fenced **code blocks** that get a language label and a one-click
+  **Copy** button.
+- **Streaming replies** — text appears token by token, on a background thread,
+  so the window never freezes. The Send button becomes **Stop** mid-reply.
 - **Real conversations** — each chat keeps its full history, so the model
-  remembers the thread (not just your last message). Chats are auto-titled from
-  your first message.
-- **Multiple chats** — start as many as you like from the sidebar and switch
-  between them; each is independent.
-- **Models read from your system** — the picker is populated from whatever you
-  actually have installed (`ollama list`); nothing is hardcoded. Pull a new
-  model and hit **↻** to see it.
+  remembers the thread. Chats auto-title from your first message and you can
+  rename them (double-click the title).
+- **Saved between sessions** — conversations and settings are written to disk
+  and restored when you reopen the app.
+- **Regenerate** the last reply, **copy** any message, and **export** a
+  conversation to Markdown.
+- **Per-chat system prompt** — steer the model for a specific conversation.
+- **Built-in model manager** — list, delete, and **pull new models with a live
+  download progress bar**, without leaving the app.
+- **Models read from your system** — the picker reflects whatever you actually
+  have installed (`ollama list`); nothing is hardcoded.
+- **Settings** — default model, default system prompt, and temperature.
+- **Generation stats** — token count and tokens/sec shown after each reply.
 
 ## Requirements
 
 - **Python 3.9+** with Tkinter (bundled with the python.org installer; on Linux
   install `python3-tk`).
 - **[Ollama](https://ollama.com/download)** installed and running, with at least
-  one model pulled.
+  one model pulled (or pull one from inside the app).
 
 ## Setup
 
@@ -43,10 +51,12 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Make sure Ollama is running and you have a model
+# 4. Make sure Ollama is running
 ollama serve                     # if it isn't already running
-ollama pull llama3.1:8b          # or any model you like
 ```
+
+You don't need to pull a model from the terminal — open **Manage models** in the
+app and pull one there (e.g. `llama3.1:8b`).
 
 ## Run
 
@@ -54,14 +64,21 @@ ollama pull llama3.1:8b          # or any model you like
 python chatGPT.py
 ```
 
-Then:
+### Using it
 
-- Pick a model from the dropdown in the top bar (use **↻** to refresh the list).
-- Type a message and press **Enter** to send; **Shift+Enter** for a newline.
-- While a reply streams, the **Send** button becomes **Stop** — click it to cut
-  the reply short.
-- Use **＋ New chat** in the sidebar to start another conversation, click a chat
-  to switch to it, and the **✕** next to a chat to delete it.
+| Action                    | How                                                   |
+| ------------------------- | ----------------------------------------------------- |
+| Send a message            | type, then **Enter** (**Shift+Enter** for a newline)  |
+| Stop a streaming reply    | click **Stop**, or press **Esc**                      |
+| New conversation          | **＋ New chat**, or **Ctrl/Cmd+N**                    |
+| Rename a chat             | double-click its title                                |
+| Delete a chat             | the **✕** next to it in the sidebar                   |
+| Regenerate last reply     | **↻ Regenerate** under the message, or **Ctrl/Cmd+R** |
+| Copy a reply / code block | **Copy** under the message / on the code block        |
+| Export to Markdown        | **Export**, or **Ctrl/Cmd+E**                         |
+| Per-chat system prompt    | **System** in the top bar                             |
+| Pull / delete models      | **Manage models** in the sidebar                      |
+| Settings                  | **Settings**, or **Ctrl/Cmd+,**                       |
 
 ### Connecting to a remote Ollama host
 
@@ -72,12 +89,20 @@ set the standard Ollama environment variable before launching:
 OLLAMA_HOST=http://192.168.1.50:11434 python chatGPT.py
 ```
 
+### Where your data lives
+
+Conversations and settings are stored as JSON under your platform's data dir
+(`$XDG_DATA_HOME/local-llm-chat`, `~/.local/share/local-llm-chat`, or
+`%APPDATA%\local-llm-chat`). Delete that folder to reset the app.
+
 ## Project structure
 
 ```
 ChatGPT-GUI/
-├── chatGPT.py        # Tkinter GUI: tabs, streaming, threading
-├── requestLocal.py   # Ollama backend: model list + streaming chat
+├── chatGPT.py        # Tkinter GUI: sidebar, bubbles, streaming, dialogs
+├── requestLocal.py   # Ollama backend: models, streaming chat, pull/delete
+├── mdrender.py       # Markdown → Tkinter Text rendering
+├── storage.py        # Conversation & settings persistence
 └── requirements.txt  # Python dependencies
 ```
 
@@ -90,14 +115,18 @@ python requestLocal.py
 ## Troubleshooting
 
 - **"Ollama not reachable"** — make sure `ollama serve` is running, then click
-  **Refresh**.
-- **"Model isn't installed"** — pull it first: `ollama pull <model>`, then
-  **Refresh** the model list.
-- **Replies are slow** — that's the model, not the app. Try a smaller model
-  (e.g. `llama3.1:8b` instead of a 70B model) or check your system resources.
+  **↻**.
+- **No models / "Model isn't installed"** — open **Manage models** and pull one
+  (e.g. `llama3.1:8b`).
+- **Replies are slow** — that's the model, not the app. Try a smaller model or
+  check your system resources.
 - **No window appears / `ModuleNotFoundError: tkinter`** — install Tkinter
   (`python3-tk` on Debian/Ubuntu, included with the python.org macOS/Windows
   installers).
+
+## License
+
+[MIT](LICENSE)
 
 ## Contributing
 
